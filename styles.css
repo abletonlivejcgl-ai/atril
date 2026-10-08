@@ -112,6 +112,13 @@ input[type=search], input[type=text], input[type=number], textarea {
   margin: 12px; padding: 8px; overflow: auto;
   background: var(--paper); color: #111; border-radius: 6px; min-height: 120px;
 }
+.scorewrap { display: flex; width: max-content; min-width: 100%; }
+.names { position: sticky; left: 0; z-index: 2; flex: none; width: 56px; background: var(--paper); }
+.names span {
+  position: absolute; left: 0; right: 4px; transform: translateY(-50%);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 600 .72rem/1 var(--sans); color: #333; text-align: right;
+}
 .paper .empty { color: #555; margin: 24px 12px; }
 .paper svg { display: block; }
 

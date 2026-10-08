@@ -221,6 +221,41 @@ async function unzipMxl(ab) {
 }
 
 /* ---------- Partitura ---------- */
+/* Dibuja la partitura y coloca los nombres de las partes en una columna fija a la izquierda,
+   para saber qué instrumento se lee aunque se desplace de lado. */
+function shortName(ins) {
+  const full = String(ins.fullName || ins.Name || '').trim();
+  return String(ins.PartAbbreviation || '').trim() || (full.length > 6 ? full.slice(0, 5).trim() + '.' : full);
+}
+function drawViewer() {
+  if (!viewer) return;
+  const { osmd, el } = viewer;
+  osmd.render();
+  const names = $('.names', el);
+  if (!names) return;
+  names.innerHTML = '';
+  const svg = $('.scorebox svg', el);
+  names.style.height = (svg ? svg.getBoundingClientRect().height : 0) + 'px';
+  try {
+    const system = osmd.GraphicSheet.MusicPages[0].MusicSystems[0];
+    const unit = 10 * osmd.zoom;
+    const byIns = new Map();
+    for (const sl of system.StaffLines) {
+      const ins = sl.ParentStaff.ParentInstrument;
+      const y = (sl.PositionAndShape.AbsolutePosition.y + 2) * unit;
+      if (!byIns.has(ins)) byIns.set(ins, []);
+      byIns.get(ins).push(y);
+    }
+    for (const [ins, ys] of byIns) {
+      const label = document.createElement('span');
+      label.textContent = shortName(ins);
+      label.title = ins.fullName || ins.Name || '';
+      label.style.top = ((ys[0] + ys[ys.length - 1]) / 2) + 'px';
+      names.append(label);
+    }
+  } catch (err) { console.error(err); }
+}
+
 async function loadScoreInto(el, song) {
   const token = ++scoreRun;
   viewer = null;
@@ -230,11 +265,14 @@ async function loadScoreInto(el, song) {
     el.innerHTML = '<p class="empty">Esta canción no tiene partitura.</p>';
     return null;
   }
-  el.innerHTML = '';
+  el.innerHTML = '<div class="scorewrap"><div class="names" aria-hidden="true"></div><div class="scorebox"></div></div>';
+  const box = $('.scorebox', el);
   try {
-    const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(el, {
+    // Todos los compases en una sola línea: se lee desplazando de lado.
+    const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(box, {
       autoResize: false, backend: 'svg', drawTitle: false, drawComposer: false,
-      drawPartNames: true, drawPartAbbreviations: true, drawingParameters: 'compact'
+      drawPartNames: false, drawPartAbbreviations: false, drawingParameters: 'compact',
+      renderSingleHorizontalStaffline: true
     });
     let content = scoreContent(sc);
     // ¿Hay instrumentos transpositores? Se calcula una vez por canción y se recuerda.
@@ -263,19 +301,10 @@ async function loadScoreInto(el, song) {
     osmd.Sheet.Instruments.forEach((ins, i) => {
       ins.Visible = !hidden.includes(i);
       ins.fullName = ins.Name;
-      // Sin abreviatura en el archivo se inventa una corta. Los nombres largos se acortan
-      // también en el primer sistema para que no coman el ancho de la pantalla.
-      if (!ins.PartAbbreviation && ins.Name) {
-        const n = String(ins.Name).trim();
-        ins.PartAbbreviation = n.length > 5 ? n.slice(0, 4).trim() + '.' : n;
-        ins.PartAbbreviationPrintObject = true;
-      }
-      if (ins.NameLabel && ins.PartAbbreviation && String(ins.Name).length > 8) ins.NameLabel.text = ins.PartAbbreviation;
     });
-    osmd.EngravingRules.InstrumentLabelTextHeight = 1.4;
     osmd.zoom = song.zoom || 1;
-    osmd.render();
-    viewer = { osmd, song };
+    viewer = { osmd, song, el };
+    drawViewer();
     return osmd;
   } catch (err) {
     console.error(err);
@@ -306,7 +335,7 @@ function setZoom(d) {
   const s = viewer.song;
   s.zoom = Math.min(2.5, Math.max(0.5, Math.round(((s.zoom || 1) + d) * 10) / 10));
   viewer.osmd.zoom = s.zoom;
-  viewer.osmd.render();
+  drawViewer();
   dbPut('songs', s);
 }
 
@@ -317,7 +346,7 @@ function togglePart(i) {
   if (ins[i].Visible && visible === 1) { toast('Tiene que quedar al menos una parte visible'); return; }
   ins[i].Visible = !ins[i].Visible;
   viewer.song.hiddenParts = ins.map((p, k) => (p.Visible ? -1 : k)).filter(k => k >= 0);
-  viewer.osmd.render();
+  drawViewer();
   dbPut('songs', viewer.song);
   document.querySelectorAll('.chip').forEach(c => {
     const on = ins[Number(c.dataset.i)].Visible;
@@ -329,7 +358,7 @@ function togglePart(i) {
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (viewer) viewer.osmd.render(); }, 200);
+  resizeTimer = setTimeout(() => { if (viewer) drawViewer(); }, 200);
 });
 
 /* ---------- Pantallas ---------- */
@@ -492,12 +521,6 @@ async function drawStage() {
       <button class="big" data-act="prev" ${i === 0 ? 'disabled' : ''}>Anterior</button>
       <button class="big primary" data-act="next" ${i === ids.length - 1 ? 'disabled' : ''}>Siguiente</button></div>`;
   const box = $('#stagescore');
-  let x0 = 0, y0 = 0;
-  box.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
-  box.addEventListener('touchend', e => {
-    const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
-    if (Math.abs(dx) > 90 && Math.abs(dy) < 60) stageGo(dx < 0 ? 1 : -1);
-  }, { passive: true });
   if (song.hasScore) {
     await loadScoreInto(box, song);
     const tools = $('#stagetools');
@@ -507,8 +530,11 @@ async function drawStage() {
 
 document.addEventListener('keydown', e => {
   if (!state.stage) return;
-  if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); stageGo(1); }
-  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); stageGo(-1); }
+  const box = $('#stagescore');
+  if (!box) return;
+  // Flechas y pedal de pasar página: desplazan la partitura; las canciones se cambian con los botones.
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); box.scrollBy({ left: box.clientWidth * 0.85, behavior: 'smooth' }); }
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); box.scrollBy({ left: -box.clientWidth * 0.85, behavior: 'smooth' }); }
 });
 
 /* ---------- Diálogos ---------- */
