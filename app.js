@@ -28,8 +28,27 @@ async function run(store, mode, fn) {
 }
 const dbAll = s => run(s, 'readonly', o => o.getAll());
 const dbGet = (s, id) => run(s, 'readonly', o => o.get(id));
-const dbPut = (s, v) => run(s, 'readwrite', o => o.put(v));
-const dbDel = (s, id) => run(s, 'readwrite', o => o.delete(id));
+/* Canciones y setlists se sellan con la hora del último cambio (sirve para sincronizar).
+   `raw` guarda sin sellar ni avisar a la sincronización. */
+const TOMB_KEY = 'atril.tomb';
+const loadTombs = () => { try { return JSON.parse(localStorage.getItem(TOMB_KEY)) || {}; } catch { return {}; } };
+const saveTombs = t => { try { localStorage.setItem(TOMB_KEY, JSON.stringify(t)); } catch { /* sin almacenamiento */ } };
+const dbPut = (s, v, raw) => {
+  if (!raw && (s === 'songs' || s === 'setlists')) v.updated = Date.now();
+  const r = run(s, 'readwrite', o => o.put(v));
+  if (!raw) r.then(() => window.atrilSync && atrilSync.schedule(), () => {});
+  return r;
+};
+const dbDel = (s, id, raw) => {
+  if (!raw && (s === 'songs' || s === 'setlists')) {
+    const t = loadTombs();
+    t[(s === 'songs' ? 's-' : 'l-') + id] = Date.now();
+    saveTombs(t);
+  }
+  const r = run(s, 'readwrite', o => o.delete(id));
+  if (!raw) r.then(() => window.atrilSync && atrilSync.schedule(), () => {});
+  return r;
+};
 
 /* ---------- Estado ---------- */
 function loadConcert() {
@@ -224,7 +243,7 @@ async function loadScoreInto(el, song) {
         const xml = sc.kind === 'mxl' ? await unzipMxl(sc.data) : sc.data;
         if (song.hasTranspose === undefined) {
           song.hasTranspose = detectTranspose(xml);
-          dbPut('songs', song);
+          dbPut('songs', song, true);
         }
         if (state.concert && song.hasTranspose) {
           if (!concertCache.has(song.id)) {
@@ -609,7 +628,8 @@ function openSongDialog(song) {
     s.notes = $('#f-notes', d).value.trim();
     try {
       if (pending) {
-        await dbPut('scores', { id: s.id, kind: pending.kind, name: pending.name, data: pending.data });
+        s.scoreAt = Date.now();
+        await dbPut('scores', { id: s.id, kind: pending.kind, name: pending.name, data: pending.data, at: s.scoreAt });
         s.hasScore = true;
         s.hiddenParts = [];
         delete s.hasTranspose;
@@ -655,9 +675,10 @@ function openMenu() {
   const d = $('#dlg');
   d.onclose = null;
   d.innerHTML = `<form method="dialog"><h2>Atril</h2>
-    <p class="hint">Todo se guarda en este dispositivo. Si borras los datos del navegador se pierde: haz copias de vez en cuando.</p>
+    <p class="hint">Todo se guarda en este dispositivo (y en tu Drive si conectas la sincronización). Si borras los datos del navegador se pierde: haz copias de vez en cuando.</p>
     <div class="menu-list">
       ${installPrompt ? '<button type="button" class="txt" id="m-install">Instalar app</button>' : ''}
+      ${window.atrilSync ? atrilSync.menuHTML() : ''}
       <button type="button" class="txt" id="m-export">Exportar copia de seguridad</button>
       <button type="button" class="txt" id="m-import">Importar copia de seguridad</button>
     </div>
@@ -669,6 +690,7 @@ function openMenu() {
     await installPrompt.userChoice;
     installPrompt = null;
   });
+  if (window.atrilSync) atrilSync.bindMenu(d);
   $('#m-export', d).onclick = exportBackup;
   $('#m-import', d).onclick = () => $('#m-file', d).click();
   $('#m-file', d).onchange = e => importBackup(e.target.files[0]);
@@ -698,11 +720,15 @@ async function importBackup(file) {
   try {
     const b = JSON.parse(await file.text());
     if (b.app !== 'atril') throw new Error('no es una copia de Atril');
-    for (const s of b.songs || []) await dbPut('songs', s);
-    for (const l of b.setlists || []) await dbPut('setlists', l);
-    for (const s of b.scores || []) {
-      await dbPut('scores', { id: s.id, kind: s.kind, name: s.name, data: s.kind === 'mxl' ? binToAb(atob(s.data)) : s.data });
+    const now = Date.now();
+    for (const sc of b.scores || []) {
+      const song = (b.songs || []).find(x => x.id === sc.id);
+      const at = (song && song.scoreAt) || now;
+      if (song) song.scoreAt = at;
+      await dbPut('scores', { id: sc.id, kind: sc.kind, name: sc.name, at, data: sc.kind === 'mxl' ? binToAb(atob(sc.data)) : sc.data });
     }
+    for (const song of b.songs || []) await dbPut('songs', song);
+    for (const l of b.setlists || []) await dbPut('setlists', l);
     $('#dlg').close();
     await refresh();
     toast('Copia importada');

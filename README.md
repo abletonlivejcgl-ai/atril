@@ -12,3 +12,7 @@ Las partituras se dibujan con [OpenSheetMusicDisplay](https://github.com/openshe
 ## Sonido real
 
 Si la partitura tiene instrumentos transpositores (trompeta en Sib, trompa en Fa, saxo…), aparece un interruptor **Sonido real**. Activado, cada parte se muestra tal como suena (sin transponer), útil para leerla desde el piano. Se recuerda entre sesiones.
+
+## Sincronizar con Google Drive
+
+Menú ⋯ → **Conectar con Google Drive**. Las canciones, setlists y partituras se guardan en una carpeta oculta de tu Drive (permiso `drive.appdata`, no ve el resto de tus archivos) y aparecen en todos tus dispositivos. Gana siempre el cambio más reciente.
