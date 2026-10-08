@@ -1,5 +1,5 @@
 /* Atril: funciona sin conexión. Sube el número de versión al publicar cambios. */
-const CACHE = 'atril-v10';
+const CACHE = 'atril-v11';
 const ASSETS = [
   './', 'index.html', 'styles.css', 'app.js', 'sync.js', 'osmd.min.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'
@@ -24,7 +24,7 @@ self.addEventListener('fetch', e => {
   if (new URL(req.url).origin !== location.origin) return;
   e.respondWith(
     caches.match(req, { ignoreSearch: true }).then(cached => {
-      const network = fetch(req).then(res => {
+      const network = fetch(req, { cache: 'no-cache' }).then(res => {
         if (res && res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put(req, copy));
