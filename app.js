@@ -215,7 +215,7 @@ async function loadScoreInto(el, song) {
   try {
     const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(el, {
       autoResize: false, backend: 'svg', drawTitle: false, drawComposer: false,
-      drawPartNames: false, drawingParameters: 'compact'
+      drawPartNames: true, drawPartAbbreviations: true, drawingParameters: 'compact'
     });
     let content = scoreContent(sc);
     // ¿Hay instrumentos transpositores? Se calcula una vez por canción y se recuerda.
@@ -241,7 +241,15 @@ async function loadScoreInto(el, song) {
     await osmd.load(content);
     if (token !== scoreRun) return null;
     const hidden = song.hiddenParts || [];
-    osmd.Sheet.Instruments.forEach((ins, i) => { ins.Visible = !hidden.includes(i); });
+    osmd.Sheet.Instruments.forEach((ins, i) => {
+      ins.Visible = !hidden.includes(i);
+      // Si el archivo no trae abreviatura, se inventa una corta para los sistemas siguientes.
+      if (!ins.PartAbbreviation && ins.Name) {
+        const n = String(ins.Name).trim();
+        ins.PartAbbreviation = n.length > 5 ? n.slice(0, 4).trim() + '.' : n;
+        ins.PartAbbreviationPrintObject = true;
+      }
+    });
     osmd.zoom = song.zoom || 1;
     osmd.render();
     viewer = { osmd, song };
