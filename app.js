@@ -2,7 +2,7 @@
 /* Atril: repertorio, setlists y partituras (MusicXML) para el escenario.
    Todo se guarda en este dispositivo (IndexedDB). */
 
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -273,6 +273,9 @@ function buildHeader(el, osmd) {
   names.append(hdr);
   const unit = 10 * osmd.zoom;
   const sr = svg.getBoundingClientRect();
+  // El dibujo está escalado por el zoom: píxeles de pantalla por unidad del SVG.
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  const sc = vb && vb.width ? sr.width / vb.width : 1;
   const centers = osmd.GraphicSheet.MusicPages[0].MusicSystems[0].StaffLines.map(sl => (sl.PositionAndShape.AbsolutePosition.y + 2) * unit);
   const perStaff = centers.map(() => []);
   const types = { 'vf-clef': 'clef', 'vf-keysignature': 'key', 'vf-timesignature': 'time' };
@@ -282,7 +285,7 @@ function buildHeader(el, osmd) {
     const cy = r.top - sr.top + r.height / 2;
     let k = 0;
     centers.forEach((c, i) => { if (Math.abs(c - cy) < Math.abs(centers[k] - cy)) k = i; });
-    perStaff[k].push({ type: types[g.getAttribute('class')], x: r.left - sr.left, w: r.width, node: g });
+    perStaff[k].push({ type: types[g.getAttribute('class')], x: r.left - sr.left, w: r.width, ux: (r.left - sr.left) / sc, uw: r.width / sc, node: g });
   });
   // Cada grupo de símbolos pegados (clave+armadura+compás de un mismo punto) es un "cambio".
   const changes = perStaff.map(list => {
@@ -312,15 +315,16 @@ function buildHeader(el, osmd) {
       const cur = {};
       for (const c of list) if (c.end <= sx) for (const t of ['clef', 'key', 'time']) if (c[t]) cur[t] = c[t];
       const g = document.createElementNS(NS, 'g');
-      let cx = gap;
+      g.setAttribute('transform', `scale(${sc})`);
+      let cx = gap / sc;                       // en unidades del SVG
       for (const t of ['clef', 'key', 'time']) {
         if (!cur[t]) continue;
         const n = cur[t].node.cloneNode(true);
-        n.setAttribute('transform', `translate(${cx - cur[t].x},0)`);
+        n.setAttribute('transform', `translate(${cx - cur[t].ux},0)`);
         g.append(n);
-        cx += cur[t].w + gap;
+        cx += cur[t].uw + gap / sc;
       }
-      width = Math.max(width, cx);
+      width = Math.max(width, cx * sc);
       groups.push(g);
     });
     centers.forEach(c => {
@@ -351,6 +355,7 @@ async function loadScoreInto(el, song) {
     el.innerHTML = '<p class="empty">Esta canción no tiene partitura.</p>';
     return null;
   }
+  el.classList.add('horiz');
   el.innerHTML = '<div class="scorewrap"><div class="names" aria-hidden="true"></div><div class="scorebox"></div></div>';
   const box = $('.scorebox', el);
   try {

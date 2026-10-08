@@ -112,6 +112,7 @@ input[type=search], input[type=text], input[type=number], textarea {
   margin: 12px; padding: 8px; overflow: auto;
   background: var(--paper); color: #111; border-radius: 6px; min-height: 120px;
 }
+.paper.horiz { padding: 8px 0; }
 .scorewrap { display: flex; width: max-content; min-width: 100%; }
 .names { position: sticky; left: 0; z-index: 2; flex: none; width: 56px; background: var(--paper); }
 .hdr { position: absolute; left: 56px; top: 0; z-index: 3; background: var(--paper); border-right: 1px solid #aaa; pointer-events: none; }
