@@ -114,6 +114,7 @@ input[type=search], input[type=text], input[type=number], textarea {
 }
 .scorewrap { display: flex; width: max-content; min-width: 100%; }
 .names { position: sticky; left: 0; z-index: 2; flex: none; width: 56px; background: var(--paper); }
+.hdr { position: absolute; left: 56px; top: 0; z-index: 3; background: var(--paper); border-right: 1px solid #aaa; pointer-events: none; }
 .names span {
   position: absolute; left: 0; right: 4px; transform: translateY(-50%);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

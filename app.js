@@ -2,7 +2,7 @@
 /* Atril: repertorio, setlists y partituras (MusicXML) para el escenario.
    Todo se guarda en este dispositivo (IndexedDB). */
 
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -257,6 +257,89 @@ function drawViewer() {
       names.append(label);
     }
   } catch (err) { console.error(err); }
+  try { buildHeader(el, osmd); } catch (err) { console.error(err); }
+}
+
+/* Clave, armadura y compás vigentes: al desplazar, los que ya salieron por la izquierda
+   se copian en un panel fijo junto a los nombres, de modo que siempre se ven los actuales. */
+function buildHeader(el, osmd) {
+  const names = $('.names', el);
+  const svg = $('.scorebox svg', el);
+  el.onscroll = null;
+  if (!names || !svg) return;
+  const hdr = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  hdr.setAttribute('class', 'hdr');
+  hdr.style.display = 'none';
+  names.append(hdr);
+  const unit = 10 * osmd.zoom;
+  const sr = svg.getBoundingClientRect();
+  const centers = osmd.GraphicSheet.MusicPages[0].MusicSystems[0].StaffLines.map(sl => (sl.PositionAndShape.AbsolutePosition.y + 2) * unit);
+  const perStaff = centers.map(() => []);
+  const types = { 'vf-clef': 'clef', 'vf-keysignature': 'key', 'vf-timesignature': 'time' };
+  svg.querySelectorAll('g.vf-clef, g.vf-keysignature, g.vf-timesignature').forEach(g => {
+    const r = g.getBoundingClientRect();
+    if (!r.width) return;
+    const cy = r.top - sr.top + r.height / 2;
+    let k = 0;
+    centers.forEach((c, i) => { if (Math.abs(c - cy) < Math.abs(centers[k] - cy)) k = i; });
+    perStaff[k].push({ type: types[g.getAttribute('class')], x: r.left - sr.left, w: r.width, node: g });
+  });
+  // Cada grupo de símbolos pegados (clave+armadura+compás de un mismo punto) es un "cambio".
+  const changes = perStaff.map(list => {
+    list.sort((a, b) => a.x - b.x);
+    const out = [];
+    for (const it of list) {
+      const last = out[out.length - 1];
+      if (last && it.x - last.end < 8 * osmd.zoom) { last[it.type] = it; last.end = Math.max(last.end, it.x + it.w); }
+      else out.push({ [it.type]: it, end: it.x + it.w });
+    }
+    return out;
+  });
+  const marks = [...new Set(changes.flat().map(c => Math.round(c.end)))].sort((a, b) => a - b);
+  let shown = -2;
+  const NS = 'http://www.w3.org/2000/svg';
+  const update = () => {
+    const sx = el.scrollLeft;
+    const idx = marks.filter(m => m <= sx).length;
+    if (idx === shown) return;
+    shown = idx;
+    if (!idx) { hdr.style.display = 'none'; return; }
+    hdr.innerHTML = '';
+    const gap = 4 * osmd.zoom;
+    let width = 0;
+    const groups = [];
+    changes.forEach((list, k) => {
+      const cur = {};
+      for (const c of list) if (c.end <= sx) for (const t of ['clef', 'key', 'time']) if (c[t]) cur[t] = c[t];
+      const g = document.createElementNS(NS, 'g');
+      let cx = gap;
+      for (const t of ['clef', 'key', 'time']) {
+        if (!cur[t]) continue;
+        const n = cur[t].node.cloneNode(true);
+        n.setAttribute('transform', `translate(${cx - cur[t].x},0)`);
+        g.append(n);
+        cx += cur[t].w + gap;
+      }
+      width = Math.max(width, cx);
+      groups.push(g);
+    });
+    centers.forEach(c => {
+      for (let i = -2; i <= 2; i++) {
+        const l = document.createElementNS(NS, 'line');
+        l.setAttribute('x1', 0); l.setAttribute('x2', width);
+        l.setAttribute('y1', c + i * unit); l.setAttribute('y2', c + i * unit);
+        l.setAttribute('stroke', '#000'); l.setAttribute('stroke-width', Math.max(1, unit * 0.1));
+        hdr.append(l);
+      }
+    });
+    groups.forEach(g => hdr.append(g));
+    hdr.setAttribute('width', width);
+    hdr.setAttribute('height', svg.getBoundingClientRect().height);
+    hdr.style.display = 'block';
+  };
+  let raf = 0;
+  el.onscroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; update(); }); };
+  update();
 }
 
 async function loadScoreInto(el, song) {
