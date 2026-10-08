@@ -2,6 +2,7 @@
 /* Atril: repertorio, setlists y partituras (MusicXML) para el escenario.
    Todo se guarda en este dispositivo (IndexedDB). */
 
+const APP_VERSION = '8';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -710,6 +711,7 @@ function openMenu() {
       <button type="button" class="txt" id="m-export">Exportar copia de seguridad</button>
       <button type="button" class="txt" id="m-import">Importar copia de seguridad</button>
     </div>
+    <p class="hint">Versión ${APP_VERSION}</p>
     <div class="actions"><span class="grow"></span><button class="solid">Cerrar</button></div></form>
     <input id="m-file" type="file" accept=".json,application/json" hidden>`;
   $('#m-install', d)?.addEventListener('click', async () => {
@@ -852,6 +854,14 @@ document.addEventListener('input', e => {
 
 /* ---------- Inicio ---------- */
 if ('serviceWorker' in navigator) {
+  // Si ya había una versión instalada y llega otra, se recarga para usar la nueva enseguida.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    location.reload();
+  });
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
 refresh().catch(err => {
