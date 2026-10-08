@@ -32,7 +32,10 @@ const dbPut = (s, v) => run(s, 'readwrite', o => o.put(v));
 const dbDel = (s, id) => run(s, 'readwrite', o => o.delete(id));
 
 /* ---------- Estado ---------- */
-const state = { tab: 'songs', songs: [], setlists: [], q: '', screen: null, stage: null };
+function loadConcert() {
+  try { return localStorage.getItem('atril.concert') === '1'; } catch { return false; }
+}
+const state = { tab: 'songs', songs: [], setlists: [], q: '', screen: null, stage: null, concert: loadConcert() };
 let viewer = null;      // partitura que se está mostrando: { osmd, song }
 let scoreRun = 0;       // descarta dibujos antiguos si cambias de pantalla
 let installPrompt = null;
@@ -67,6 +70,137 @@ function binToAb(bin) {
 const scoreContent = sc => (sc.kind === 'mxl' ? abToBin(sc.data) : sc.data);
 const metaLine = s => [s.artist, s.key && 'Tono ' + s.key, s.bpm && s.bpm + ' bpm'].filter(Boolean).join(' · ');
 
+/* ---------- Sonido real (sin transposición) ----------
+   En MusicXML cada parte transpositora lleva un bloque <transpose> con lo que hay
+   que sumar a la nota escrita para obtener la nota que suena. Aquí lo aplicamos
+   a notas y armaduras y quitamos el bloque, para dibujar la partitura en sonido real. */
+const STEPS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const STEP_SEMI = [0, 2, 4, 5, 7, 9, 11];
+const FIFTHS_OF_STEP = [0, 2, 4, -1, 1, 3, 5];      // armadura mayor sobre cada nota natural
+const DIATONIC_OF_SEMI = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
+const concertCache = new Map();                      // id de canción -> MusicXML en sonido real
+
+function transposePitch(step, alter, octave, tr) {
+  const i = STEPS.indexOf(step);
+  const d = octave * 7 + i + tr.diatonic + 7 * tr.octave;
+  const s = octave * 12 + STEP_SEMI[i] + alter + tr.chromatic + 12 * tr.octave;
+  const oct = Math.floor(d / 7);
+  const ni = ((d % 7) + 7) % 7;
+  return { step: STEPS[ni], alter: s - (oct * 12 + STEP_SEMI[ni]), octave: oct };
+}
+
+function transposeFifths(f, tr) {
+  for (let i = 0; i < 7; i++) {
+    const a = (f - FIFTHS_OF_STEP[i]) / 7;           // alteración de la tónica mayor
+    if (!Number.isInteger(a)) continue;
+    const p = transposePitch(STEPS[i], a, 4, tr);
+    let nf = FIFTHS_OF_STEP[STEPS.indexOf(p.step)] + 7 * p.alter;
+    while (nf > 7) nf -= 12;                         // evita armaduras con más de 7 alteraciones
+    while (nf < -7) nf += 12;
+    return nf;
+  }
+  return f;
+}
+
+const directChild = (el, name) => Array.from(el.children).find(c => c.localName === name) || null;
+const isActive = tr => !!(tr.diatonic || tr.chromatic || tr.octave);
+
+function readTranspose(t) {
+  const num = name => { const c = directChild(t, name); return c ? parseInt(c.textContent, 10) || 0 : 0; };
+  const tr = { diatonic: num('diatonic'), chromatic: num('chromatic'), octave: num('octave-change') };
+  if (!directChild(t, 'diatonic') && tr.chromatic) {   // el diatónico es opcional en MusicXML
+    const c = Math.abs(tr.chromatic);
+    tr.diatonic = Math.sign(tr.chromatic) * (DIATONIC_OF_SEMI[c % 12] + 7 * Math.floor(c / 12));
+  }
+  return tr;
+}
+
+function detectTranspose(xml) {
+  const re = /<transpose\b[^>]*>([\s\S]*?)<\/transpose>/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    const c = /<chromatic>\s*(-?\d+)/.exec(m[1]);
+    const o = /<octave-change>\s*(-?\d+)/.exec(m[1]);
+    if ((c && Number(c[1]) !== 0) || (o && Number(o[1]) !== 0)) return true;
+  }
+  return false;
+}
+
+function toConcertPitch(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('XML no válido');
+  if (doc.documentElement.localName !== 'score-partwise') throw new Error('Solo se admite score-partwise');
+  for (const part of Array.from(doc.documentElement.children)) {
+    if (part.localName !== 'part') continue;
+    let tr = { diatonic: 0, chromatic: 0, octave: 0 };
+    for (const measure of Array.from(part.children)) {
+      if (measure.localName !== 'measure') continue;
+      for (const el of Array.from(measure.children)) {
+        if (el.localName === 'attributes') {
+          const ts = Array.from(el.children).filter(c => c.localName === 'transpose');
+          if (ts.length) { tr = readTranspose(ts[0]); ts.forEach(t => el.removeChild(t)); }
+          if (!isActive(tr)) continue;
+          for (const key of Array.from(el.children).filter(c => c.localName === 'key')) {
+            const f = directChild(key, 'fifths');
+            if (f) f.textContent = String(transposeFifths(parseInt(f.textContent, 10) || 0, tr));
+          }
+        } else if (el.localName === 'note' && isActive(tr)) {
+          const p = directChild(el, 'pitch');
+          const stepEl = p && directChild(p, 'step');
+          const octEl = p && directChild(p, 'octave');
+          if (!stepEl || !octEl) continue;
+          const altEl = directChild(p, 'alter');
+          const r = transposePitch(stepEl.textContent.trim(), altEl ? parseFloat(altEl.textContent) || 0 : 0,
+            parseInt(octEl.textContent, 10), tr);
+          stepEl.textContent = r.step;
+          octEl.textContent = String(r.octave);
+          if (r.alter) {
+            if (altEl) altEl.textContent = String(r.alter);
+            else { const a = doc.createElement('alter'); a.textContent = String(r.alter); stepEl.after(a); }
+          } else if (altEl) p.removeChild(altEl);
+          const acc = directChild(el, 'accidental');   // el visor lo recalcula con la nueva armadura
+          if (acc) el.removeChild(acc);
+        }
+      }
+    }
+  }
+  const out = new XMLSerializer().serializeToString(doc);
+  return out.startsWith('<?xml') ? out : '<?xml version="1.0" encoding="UTF-8"?>\n' + out;
+}
+
+/* Saca el MusicXML de un .mxl (un zip) con las herramientas del navegador. */
+async function unzipMxl(ab) {
+  const u8 = new Uint8Array(ab), dv = new DataView(ab);
+  let e = u8.length - 22;
+  while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw new Error('mxl no válido');
+  const count = dv.getUint16(e + 10, true);
+  let p = dv.getUint32(e + 16, true);
+  const entries = [];
+  for (let k = 0; k < count && dv.getUint32(p, true) === 0x02014b50; k++) {
+    const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    entries.push({
+      method: dv.getUint16(p + 10, true), csize: dv.getUint32(p + 20, true), off: dv.getUint32(p + 42, true),
+      name: new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nlen))
+    });
+    p += 46 + nlen + xlen + clen;
+  }
+  const read = async en => {
+    const start = en.off + 30 + dv.getUint16(en.off + 26, true) + dv.getUint16(en.off + 28, true);
+    const data = u8.subarray(start, start + en.csize);
+    if (en.method === 0) return new TextDecoder().decode(data);
+    const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).text();
+  };
+  let path = null;
+  const container = entries.find(x => x.name === 'META-INF/container.xml');
+  if (container) { const m = /full-path="([^"]+)"/.exec(await read(container)); if (m) path = m[1]; }
+  const main = entries.find(x => x.name === path) ||
+    entries.find(x => /\.(xml|musicxml)$/i.test(x.name) && !x.name.startsWith('META-INF/'));
+  if (!main) throw new Error('El .mxl no contiene partitura');
+  return read(main);
+}
+
 /* ---------- Partitura ---------- */
 async function loadScoreInto(el, song) {
   const token = ++scoreRun;
@@ -83,7 +217,28 @@ async function loadScoreInto(el, song) {
       autoResize: false, backend: 'svg', drawTitle: false, drawComposer: false,
       drawPartNames: false, drawingParameters: 'compact'
     });
-    await osmd.load(scoreContent(sc));
+    let content = scoreContent(sc);
+    // ¿Hay instrumentos transpositores? Se calcula una vez por canción y se recuerda.
+    if (song.hasTranspose === undefined || (state.concert && song.hasTranspose)) {
+      try {
+        const xml = sc.kind === 'mxl' ? await unzipMxl(sc.data) : sc.data;
+        if (song.hasTranspose === undefined) {
+          song.hasTranspose = detectTranspose(xml);
+          dbPut('songs', song);
+        }
+        if (state.concert && song.hasTranspose) {
+          if (!concertCache.has(song.id)) {
+            concertCache.set(song.id, toConcertPitch(xml));
+            if (concertCache.size > 4) concertCache.delete(concertCache.keys().next().value);
+          }
+          content = concertCache.get(song.id);
+        }
+      } catch (err) {
+        console.error(err);
+        if (state.concert) toast('No se ha podido pasar esta partitura a sonido real');
+      }
+    }
+    await osmd.load(content);
     if (token !== scoreRun) return null;
     const hidden = song.hiddenParts || [];
     osmd.Sheet.Instruments.forEach((ins, i) => { ins.Visible = !hidden.includes(i); });
@@ -98,13 +253,19 @@ async function loadScoreInto(el, song) {
   }
 }
 
+const concertButton = (label, compact) =>
+  `<button class="toggle${compact ? ' compact' : ''}" data-act="concert" aria-pressed="${state.concert}"
+    aria-label="Sonido real, sin transposición" title="Muestra cada parte como suena, sin transposición">
+    <span class="sw" aria-hidden="true"></span>${label}</button>`;
+
 function toolsHTML(osmd) {
   const ins = osmd.Sheet.Instruments;
+  const concert = viewer && viewer.song.hasTranspose ? concertButton('Sonido real') : '';
   const parts = ins.length > 1
     ? `<div class="chips" role="group" aria-label="Partes visibles">${ins.map((p, i) =>
         `<button class="chip${p.Visible ? ' on' : ''}" data-act="part" data-i="${i}" aria-pressed="${p.Visible}">${esc(p.Name || 'Parte ' + (i + 1))}</button>`).join('')}</div>`
     : '';
-  return parts +
+  return concert + parts +
     '<button class="txt" data-act="zoom" data-d="-0.1" aria-label="Reducir partitura">A−</button>' +
     '<button class="txt" data-act="zoom" data-d="0.1" aria-label="Ampliar partitura">A+</button>';
 }
@@ -292,6 +453,7 @@ async function drawStage() {
       <button class="icon" data-act="close-stage" aria-label="Cerrar modo escenario">✕</button>
       <div class="stage-title"><strong>${esc(song.title)}</strong><span>${esc(metaLine(song))}</span></div>
       <span class="count">${i + 1} de ${ids.length}</span>
+      <span id="stagetools"></span>
       <button class="txt" data-act="zoom" data-d="-0.1" aria-label="Reducir partitura">A−</button>
       <button class="txt" data-act="zoom" data-d="0.1" aria-label="Ampliar partitura">A+</button></div>
     <div id="stagescore" class="paper stage-paper"></div>
@@ -305,8 +467,11 @@ async function drawStage() {
     const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
     if (Math.abs(dx) > 90 && Math.abs(dy) < 60) stageGo(dx < 0 ? 1 : -1);
   }, { passive: true });
-  if (song.hasScore) await loadScoreInto(box, song);
-  else box.innerHTML = `<p class="stage-note">${esc(song.notes || 'Esta canción no tiene partitura.')}</p>`;
+  if (song.hasScore) {
+    await loadScoreInto(box, song);
+    const tools = $('#stagetools');
+    if (tools && song.hasTranspose && viewer && viewer.song === song) tools.innerHTML = concertButton('Real', true);
+  } else box.innerHTML = `<p class="stage-note">${esc(song.notes || 'Esta canción no tiene partitura.')}</p>`;
 }
 
 document.addEventListener('keydown', e => {
@@ -439,6 +604,8 @@ function openSongDialog(song) {
         await dbPut('scores', { id: s.id, kind: pending.kind, name: pending.name, data: pending.data });
         s.hasScore = true;
         s.hiddenParts = [];
+        delete s.hasTranspose;
+        concertCache.delete(s.id);
       }
       await dbPut('songs', s);
     } catch (err) {
@@ -553,6 +720,12 @@ document.addEventListener('click', async e => {
     case 'back': history.back(); break;
     case 'zoom': setZoom(Number(d)); break;
     case 'part': togglePart(idx); break;
+    case 'concert':
+      state.concert = !state.concert;
+      try { localStorage.setItem('atril.concert', state.concert ? '1' : '0'); } catch { /* no es imprescindible */ }
+      toast(state.concert ? 'Sonido real: cada parte se ve como suena' : 'Notas escritas para cada instrumento');
+      if (state.stage) drawStage(); else render();
+      break;
     case 'stage-song': openStage([id], 0); break;
     case 'new-setlist': {
       const name = await askText('Nombre del setlist');
