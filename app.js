@@ -262,13 +262,17 @@ async function loadScoreInto(el, song) {
     const hidden = song.hiddenParts || [];
     osmd.Sheet.Instruments.forEach((ins, i) => {
       ins.Visible = !hidden.includes(i);
-      // Si el archivo no trae abreviatura, se inventa una corta para los sistemas siguientes.
+      ins.fullName = ins.Name;
+      // Sin abreviatura en el archivo se inventa una corta. Los nombres largos se acortan
+      // también en el primer sistema para que no coman el ancho de la pantalla.
       if (!ins.PartAbbreviation && ins.Name) {
         const n = String(ins.Name).trim();
         ins.PartAbbreviation = n.length > 5 ? n.slice(0, 4).trim() + '.' : n;
         ins.PartAbbreviationPrintObject = true;
       }
+      if (ins.NameLabel && ins.PartAbbreviation && String(ins.Name).length > 8) ins.NameLabel.text = ins.PartAbbreviation;
     });
+    osmd.EngravingRules.InstrumentLabelTextHeight = 1.4;
     osmd.zoom = song.zoom || 1;
     osmd.render();
     viewer = { osmd, song };
@@ -290,7 +294,7 @@ function toolsHTML(osmd) {
   const concert = viewer && viewer.song.hasTranspose ? concertButton('Sonido real') : '';
   const parts = ins.length > 1
     ? `<div class="chips" role="group" aria-label="Partes visibles">${ins.map((p, i) =>
-        `<button class="chip${p.Visible ? ' on' : ''}" data-act="part" data-i="${i}" aria-pressed="${p.Visible}">${esc(p.Name || 'Parte ' + (i + 1))}</button>`).join('')}</div>`
+        `<button class="chip${p.Visible ? ' on' : ''}" data-act="part" data-i="${i}" aria-pressed="${p.Visible}">${esc(p.fullName || p.Name || 'Parte ' + (i + 1))}</button>`).join('')}</div>`
     : '';
   return concert + parts +
     '<button class="txt" data-act="zoom" data-d="-0.1" aria-label="Reducir partitura">A−</button>' +
