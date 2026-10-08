@@ -230,7 +230,9 @@ function shortName(ins) {
 function drawViewer() {
   if (!viewer) return;
   const { osmd, el } = viewer;
+  const ratio = el.scrollWidth > el.clientWidth ? el.scrollLeft / el.scrollWidth : 0;   // para no perder el compás
   osmd.render();
+  el.scrollLeft = ratio * el.scrollWidth;
   const names = $('.names', el);
   if (!names) return;
   names.innerHTML = '';
@@ -355,11 +357,7 @@ function togglePart(i) {
   });
 }
 
-let resizeTimer;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (viewer) drawViewer(); }, 200);
-});
+/* Al girar el móvil no hace falta redibujar: la partitura es una sola línea y no depende del ancho. */
 
 /* ---------- Pantallas ---------- */
 const navHTML = () => `<nav class="nav" aria-label="Secciones">
