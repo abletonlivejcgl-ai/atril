@@ -3,10 +3,11 @@
    Cada canción, setlist y partitura es un archivo; gana siempre el cambio más reciente. */
 const atrilSync = (() => {
   const CLIENT_ID = '459168317629-g0rbg6tn3c6c3o2el70h3t8dd8485t6v.apps.googleusercontent.com';
-  const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  const SCOPE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.readonly';
+  const FOLDER_NAME = 'Atril';
   const API = 'https://www.googleapis.com/drive/v3/files';
   const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
-  const K_ON = 'atril.drive.on', K_TOKEN = 'atril.drive.token', K_LAST = 'atril.drive.last';
+  const K_ON = 'atril.drive.on', K_TOKEN = 'atril.drive.token', K_LAST = 'atril.drive.last', K_FOLDER = 'atril.drive.folder';
 
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -15,7 +16,7 @@ const atrilSync = (() => {
   };
 
   let busy = false, again = false, timer = null, tokenClient = null, gisLoading = null;
-  let info = { error: '' };
+  let info = { error: '', note: '' };
 
   /* ---------- Acceso a Google ---------- */
   const isOn = () => store.get(K_ON) === '1';
@@ -49,6 +50,7 @@ const atrilSync = (() => {
           if (r.error || !r.access_token) { rej(new Error(r.error || 'sin acceso')); return; }
           store.set(K_TOKEN, JSON.stringify({ token: r.access_token, exp: Date.now() + (Number(r.expires_in) || 3600) * 1000 }));
           store.set(K_ON, '1');
+          if (String(r.scope || '').includes('drive.readonly')) store.set(K_FOLDER, '1'); else store.del(K_FOLDER);
           res(r.access_token);
         },
         error_callback: e => rej(new Error((e && e.type) || 'cancelado'))
@@ -58,7 +60,7 @@ const atrilSync = (() => {
   }
   function signOut() {
     const t = validToken();
-    store.del(K_ON); store.del(K_TOKEN); store.del(K_LAST);
+    store.del(K_ON); store.del(K_TOKEN); store.del(K_LAST); store.del(K_FOLDER);
     if (t && window.google && google.accounts) { try { google.accounts.oauth2.revoke(t, () => {}); } catch { /* da igual */ } }
   }
 
@@ -186,6 +188,56 @@ const atrilSync = (() => {
     return changed.n;
   }
 
+
+  /* ---------- Carpeta «Atril» del Drive ---------- */
+  const folderOn = () => store.get(K_FOLDER) === '1';
+  async function listFolder(token) {
+    const q1 = `mimeType='application/vnd.google-apps.folder' and name='${FOLDER_NAME}' and trashed=false`;
+    const folders = (await (await api(`${API}?q=${encodeURIComponent(q1)}&fields=${encodeURIComponent('files(id)')}&pageSize=10`, {}, token)).json()).files || [];
+    const out = [];
+    for (const f of folders) {
+      let page = '';
+      do {
+        const q2 = `'${f.id}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`;
+        const j = await (await api(`${API}?q=${encodeURIComponent(q2)}&pageSize=200&fields=${encodeURIComponent('nextPageToken,files(id,name,modifiedTime)')}` + (page ? '&pageToken=' + page : ''), {}, token)).json();
+        out.push(...(j.files || []));
+        page = j.nextPageToken || '';
+      } while (page);
+    }
+    return { found: folders.length > 0, files: out.filter(f => /\.(musicxml|xml|mxl)$/i.test(f.name)) };
+  }
+  /* Importa las partituras nuevas (o modificadas) de la carpeta. Devuelve cuántas. */
+  async function importFolder(token) {
+    const { found, files } = await listFolder(token);
+    if (!found) { info.note = 'No encuentro la carpeta «' + FOLDER_NAME + '» en tu Drive'; return 0; }
+    info.note = '';
+    const songs = await dbAll('songs');
+    let n = 0;
+    for (const f of files) {
+      const old = songs.find(x => x.driveId === f.id);
+      if (old && old.driveModified === f.modifiedTime) continue;
+      try {
+        const blob = await (await api(`${API}/${f.id}?alt=media`, {}, token)).blob();
+        const p = await readScoreFile(new File([blob], f.name));
+        const meta = await probeScore(p);
+        const at = Date.now();
+        let song = old;
+        if (!song) {
+          song = { id: uid(), title: meta.title || f.name.replace(/\.[^.]+$/, ''), artist: meta.composer, key: '', bpm: '', notes: '',
+            hiddenParts: [], zoom: 1, hasScore: true, added: at };
+        } else { song.hiddenParts = []; delete song.hasTranspose; concertCache.delete(song.id); }
+        await dbPut('scores', { id: song.id, kind: p.kind, name: p.name, data: p.data, at }, true);
+        song.driveId = f.id; song.driveModified = f.modifiedTime; song.scoreAt = at; song.hasScore = true;
+        await dbPut('songs', song);
+        n++;
+      } catch (err) {
+        if (String(err.message).includes('403')) throw err;
+        console.error('No se pudo importar', f.name, err);
+      }
+    }
+    return n;
+  }
+
   async function sync(manual) {
     if (!isOn()) return;
     if (busy) { again = true; return; }
@@ -193,14 +245,25 @@ const atrilSync = (() => {
     if (!token) { info.error = 'Toca para reconectar'; armGesture(); return; }
     busy = true; info.error = '';
     try {
-      const n = await run(token);
+      let n = await run(token);
+      let m = 0;
+      if (folderOn()) {
+        try {
+          m = await importFolder(token);
+          if (m) n += m + (await run(token));       // se vuelve a sincronizar para subir lo importado
+        } catch (err) {
+          if (!String(err.message).includes('403')) throw err;
+          store.del(K_FOLDER);
+          info.note = 'Falta el permiso de la carpeta: pulsa «Dar acceso a la carpeta»';
+        }
+      }
       if (n) {
         if (state.stage) {
           state.songs = (await dbAll('songs')).sort((a, b) => byText(a.title, b.title));
           state.setlists = (await dbAll('setlists')).sort((a, b) => byText(a.name, b.name));
         } else await refresh();
       }
-      if (manual) toast(n ? 'Sincronizado: ' + n + (n === 1 ? ' cambio recibido' : ' cambios recibidos') : 'Todo al día con Drive');
+      if (manual) toast(info.note || (m ? m + (m === 1 ? ' partitura importada de la carpeta' : ' partituras importadas de la carpeta') : n ? 'Sincronizado: ' + n + (n === 1 ? ' cambio recibido' : ' cambios recibidos') : 'Todo al día con Drive'));
     } catch (err) {
       console.error(err);
       info.error = err.message === 'auth' ? 'Toca para reconectar' : 'No se pudo sincronizar (¿sin conexión?)';
@@ -243,6 +306,9 @@ const atrilSync = (() => {
         <p class="hint">Así tus canciones y partituras aparecen en todos tus dispositivos.</p>`;
     }
     return `<p class="hint ${info.error ? 'bad' : 'ok'}" id="m-dstatus">${info.error || 'Drive conectado · ' + ago()}</p>
+      ${folderOn()
+        ? `<p class="hint">Carpeta «${FOLDER_NAME}» de tu Drive: suelta ahí tus archivos MusicXML y se importan al sincronizar.${info.note ? ' <b>' + info.note + '</b>' : ''}</p>`
+        : '<button type="button" class="txt" id="m-folder">Dar acceso a la carpeta «' + FOLDER_NAME + '» de Drive</button>'}
       <button type="button" class="txt" id="m-sync">Sincronizar ahora</button>
       <button type="button" class="txt" id="m-unlink">Desconectar Drive</button>`;
   }
@@ -260,6 +326,13 @@ const atrilSync = (() => {
         console.error(err);
         toast(err.message === 'offline' ? 'Necesitas conexión para conectar con Drive' : 'No se pudo conectar con Google');
       }
+    };
+    const fo = $('#m-folder', d);
+    if (fo) fo.onclick = async () => {
+      try { await signIn('consent'); } catch { toast('No se pudo conectar con Google'); return; }
+      if (!folderOn()) { toast('No diste permiso para leer la carpeta'); return; }
+      await sync(true);
+      if (d.open) redraw();
     };
     const s = $('#m-sync', d);
     if (s) s.onclick = async () => {

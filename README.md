@@ -16,3 +16,7 @@ Si la partitura tiene instrumentos transpositores (trompeta en Sib, trompa en Fa
 ## Sincronizar con Google Drive
 
 Menú ⋯ → **Conectar con Google Drive**. Las canciones, setlists y partituras se guardan en una carpeta oculta de tu Drive (permiso `drive.appdata`, no ve el resto de tus archivos) y aparecen en todos tus dispositivos. Gana siempre el cambio más reciente.
+
+### Carpeta «Atril» en tu Drive
+
+Crea una carpeta llamada **Atril** en tu Drive y suelta ahí archivos MusicXML (.musicxml, .xml, .mxl). Al sincronizar, Atril los importa como canciones nuevas (y actualiza los que cambies). Requiere el permiso de solo lectura de Drive.

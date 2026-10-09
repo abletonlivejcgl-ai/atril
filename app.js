@@ -2,7 +2,7 @@
 /* Atril: repertorio, setlists y partituras (MusicXML) para el escenario.
    Todo se guarda en este dispositivo (IndexedDB). */
 
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);

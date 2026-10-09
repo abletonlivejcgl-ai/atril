@@ -1,5 +1,5 @@
 /* Atril: funciona sin conexión. Sube el número de versión al publicar cambios. */
-const CACHE = 'atril-v11';
+const CACHE = 'atril-v12';
 const ASSETS = [
   './', 'index.html', 'styles.css', 'app.js', 'sync.js', 'osmd.min.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'
