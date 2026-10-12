@@ -18,8 +18,10 @@ jobs:
           mkdir out
           cp -R build/LevelMatch_artefacts/Release/VST3/*.vst3 out/
           cp -R build/GainStage_artefacts/Release/VST3/*.vst3 out/
+          cp -R build/Synth808_artefacts/Release/VST3/*.vst3 out/
           cp -R build/LevelMatch_artefacts/Release/AU/*.component out/
           cp -R build/GainStage_artefacts/Release/AU/*.component out/
+          cp -R build/Synth808_artefacts/Release/AU/*.component out/
           for p in out/*; do codesign --force --deep -s - "$p"; done
           cd out && zip -r ../LevelMatch-macOS.zip .
       - uses: actions/upload-artifact@v4
