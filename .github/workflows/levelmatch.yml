@@ -2,6 +2,8 @@ name: Build LevelMatch (macOS)
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: macos-14
@@ -22,3 +24,7 @@ jobs:
         with:
           name: LevelMatch-macOS
           path: LevelMatch-macOS.zip
+      - name: Publish release
+        run: gh release create levelmatch-${{ github.run_number }} LevelMatch-macOS.zip --title "Level Match build ${{ github.run_number }}" --notes "VST3 y AU para macOS" --target ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
