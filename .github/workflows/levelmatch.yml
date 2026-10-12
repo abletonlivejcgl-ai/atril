@@ -1,0 +1,24 @@
+name: Build LevelMatch (macOS)
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S levelmatch -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+      - name: Sign (ad-hoc) and zip
+        run: |
+          mkdir out
+          cp -R build/LevelMatch_artefacts/Release/VST3/*.vst3 out/
+          cp -R build/LevelMatch_artefacts/Release/AU/*.component out/
+          for p in out/*; do codesign --force --deep -s - "$p"; done
+          cd out && zip -r ../LevelMatch-macOS.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LevelMatch-macOS
+          path: LevelMatch-macOS.zip
