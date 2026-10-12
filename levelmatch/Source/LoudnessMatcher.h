@@ -105,7 +105,7 @@ public:
             double acc = 0.0;
             for (int i = 0; i < numSamples; ++i)
             {
-                const double y = filters[(size_t) c].process ((double) data[c][i]);
+                const double y = kWeighted ? filters[(size_t) c].process ((double) data[c][i]) : (double) data[c][i];
                 acc += y * y;
             }
             sum += acc / numSamples;
@@ -121,7 +121,14 @@ public:
         }
         return level();
     }
-    float level() const noexcept { return valid ? msToLufs (ms) : kNoLevel; }
+    // Con kWeighted = false devuelve RMS en dBFS (sin ponderación ni el -0.691 de LUFS).
+    float level() const noexcept
+    {
+        if (! valid) return kNoLevel;
+        const float v = msToLufs (ms);
+        return (kWeighted || v <= kNoLevel) ? v : v + 0.691f;
+    }
+    bool kWeighted = true;
 
     float gateLufs = -70.0f;
 
