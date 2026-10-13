@@ -10,7 +10,7 @@ APVTS::ParameterLayout LevelMatchProcessor::createLayout()
                  juce::StringArray { "Referencia (antes)", "Igualar (despues)" }, 1));
     p.push_back (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "group", 1 }, "Grupo", 1, mg::kGroups, 1));
     p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "speed", 1 }, "Velocidad (s)",
-                 juce::NormalisableRange<float> (0.2f, 10.0f, 0.01f, 0.5f), 2.0f));
+                 juce::NormalisableRange<float> (0.05f, 10.0f, 0.01f, 0.5f), 0.5f));
     p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "maxgain", 1 }, "Ganancia maxima (dB)",
                  juce::NormalisableRange<float> (6.0f, 40.0f, 0.1f), 24.0f));
     p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "trim", 1 }, "Ajuste fino (dB)",
@@ -50,7 +50,7 @@ bool LevelMatchProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 
 void LevelMatchProcessor::prepareToPlay (double sr, int)
 {
-    meter.prepare (sr, 1.5);
+    meter.prepare (sr, 0.05);
     follower.prepare (sr);
     lastGainDb = 0.0;
 }

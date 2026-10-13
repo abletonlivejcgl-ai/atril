@@ -80,7 +80,7 @@ class LoudnessMeter
 public:
     static constexpr int kMaxCh = 2;
 
-    void prepare (double sampleRate, double timeConstantSeconds = 1.5)
+    void prepare (double sampleRate, double timeConstantSeconds = 0.05)
     {
         fs = sampleRate;
         tau = timeConstantSeconds;
@@ -94,7 +94,7 @@ public:
         valid = false;
     }
 
-    // Procesa un bloque (sin modificarlo) y devuelve el volumen actual en LUFS, o kNoLevel si aún no hay señal.
+    // Procesa un bloque (sin modificarlo) y devuelve el volumen a corto plazo en LUFS (kNoLevel si es silencio).
     float process (const float* const* data, int numChannels, int numSamples) noexcept
     {
         if (numSamples <= 0) return level();
@@ -110,17 +110,15 @@ public:
             }
             sum += acc / numSamples;
         }
-        if (msToLufs (sum) > gateLufs)               // los silencios no cambian la medida
+        if (! valid) { ms = sum; valid = true; }
+        else
         {
-            if (! valid) { ms = sum; valid = true; }
-            else
-            {
-                const double a = 1.0 - std::exp (-(double) numSamples / (fs * tau));
-                ms += (sum - ms) * a;
-            }
+            const double a = 1.0 - std::exp (-(double) numSamples / (fs * tau));
+            ms += (sum - ms) * a;
         }
         return level();
     }
+    double meanSquare() const noexcept { return ms; }
     // Con kWeighted = false devuelve RMS en dBFS (sin ponderación ni el -0.691 de LUFS).
     float level() const noexcept
     {
@@ -133,33 +131,42 @@ public:
     float gateLufs = -70.0f;
 
 private:
-    double fs = 44100.0, tau = 1.5, ms = 0.0;
+    double fs = 44100.0, tau = 0.05, ms = 0.0;
     bool valid = false;
     std::array<KWeighting, kMaxCh> filters;
 };
 
-// Calcula la ganancia (dB) que iguala el volumen propio al de referencia, con cambios suaves.
+// Calcula la ganancia (dB) que iguala el volumen propio al de referencia.
+// Promedia la energia de las DOS senales con la misma ventana y solo cuando ambas suenan, asi la comparacion es exacta.
 class GainFollower
 {
 public:
     void prepare (double sampleRate) { fs = sampleRate; reset(); }
-    void reset() noexcept { gainDb = 0.0; }
+    void reset() noexcept { gainDb = 0.0; refE = ownE = 0.0; started = false; }
 
-    // Devuelve la ganancia a aplicar al final de este bloque.
     double update (float refLufs, float ownLufs, int numSamples, double speedSeconds,
                    double maxGainDb, double trimDb, bool freeze) noexcept
     {
-        if (! freeze && refLufs > kNoLevel && ownLufs > kNoLevel)
+        if (! freeze && refLufs > gateLufs && ownLufs > gateLufs)
         {
-            const double target = std::clamp ((double) refLufs - (double) ownLufs, -maxGainDb, maxGainDb);
-            const double a = 1.0 - std::exp (-(double) numSamples / (fs * std::max (0.05, speedSeconds)));
-            gainDb += (target - gainDb) * a;
+            const double re = std::pow (10.0, ((double) refLufs + 0.691) / 10.0);
+            const double oe = std::pow (10.0, ((double) ownLufs + 0.691) / 10.0);
+            if (! started) { refE = re; ownE = oe; started = true; }
+            else
+            {
+                const double a = 1.0 - std::exp (-(double) numSamples / (fs * std::max (0.03, speedSeconds)));
+                refE += (re - refE) * a;
+                ownE += (oe - ownE) * a;
+            }
+            gainDb = std::clamp (10.0 * std::log10 (refE / ownE), -maxGainDb, maxGainDb);
         }
         return gainDb + trimDb;
     }
     double current() const noexcept { return gainDb; }
+    float gateLufs = -70.0f;
 
 private:
-    double fs = 44100.0, gainDb = 0.0;
+    double fs = 44100.0, gainDb = 0.0, refE = 0.0, ownE = 0.0;
+    bool started = false;
 };
 }
