@@ -182,6 +182,9 @@ input[type="range"] { width: 100%; min-width: 0; margin: 0; }
         <h2>Pantalla</h2>
         <div class="stack">
           <label class="check"><input type="checkbox" id="windowed" checked> Modo ventana</label>
+          <label class="check"><input type="checkbox" id="uni" checked> Ventanas iguales, sin deformar mi imagen</label>
+          <div class="seg" role="group" aria-label="Contenido de las ventanas"><button type="button" data-uc="full" aria-pressed="true">Imagen entera</button><button type="button" data-uc="head" aria-pressed="false">Solo cabeza</button></div>
+          <label class="row" for="usize"><span>Tamaño ventana</span><input type="range" id="usize" min="10" max="70" value="30"><output id="usizeO">30</output></label>
           <label class="check"><input type="checkbox" id="mirror" checked> Espejo</label>
           <label class="check"><input type="checkbox" id="labels" checked> Etiquetas</label>
           <label class="check"><input type="checkbox" id="showPip" checked> Ver mi cámara en miniatura</label>
@@ -5226,7 +5229,7 @@ return a / b;`,pse=`
 
   const S = { src: 'demo', thr: 22, minSize: 20, seg: 5, split: 2, maxWin: 10, zone: 1.5, release: 120,
               scale: 1.25, trail: 5, bg: 0, wall: 'landscape', windowed: true, mirror: true, labels: true,
-              motion: true, face: true, roi: true, showZone: false, paused: false };
+              motion: true, face: true, roi: true, showZone: false, paused: false, uni: true, usize: 30, ucontent: 'full' };
   let clk = 0; // reloj propio en ms
 
   /* ---------- origen ---------- */
@@ -5401,6 +5404,13 @@ return a / b;`,pse=`
   }
   let frame = 0;
   function snapshot(t) {
+    if (S.uni) {
+      const u = uniRect(), c = document.createElement('canvas'); c.width = 160; c.height = Math.round(160 * SH / SW);
+      c.getContext('2d').drawImage(src, u.x, u.y, u.w, u.h, 0, 0, c.width, c.height);
+      t.hist.push({ x: t.x, y: t.y, w: t.w, h: t.h, img: c });
+      while (t.hist.length > Math.max(S.trail, 0)) t.hist.shift();
+      return;
+    }
     const sw = Math.max(8, t.w * SW), sh = Math.max(8, t.h * SH);
     const k = Math.min(1, 150 / Math.max(sw, sh));
     const c = document.createElement('canvas'); c.width = Math.max(4, Math.round(sw * k)); c.height = Math.max(4, Math.round(sh * k));
@@ -5478,10 +5488,20 @@ return a / b;`,pse=`
     c.lineTo(SW, SH); c.lineTo(0, SH); c.closePath(); c.fill();
   }
   buildWall();
+  function uniRect() {
+    if (S.ucontent !== 'head') return { x: 0, y: 0, w: SW, h: SH };
+    const r = roi || roiT; if (!r) return { x: 0, y: 0, w: SW, h: SH };
+    const rw = r.w * SW, rh = r.h * SH, ar = SW / SH;
+    let w = Math.max(rw, rh * ar); w = Math.min(w, SW); let h = w / ar;
+    if (h > SH) { h = SH; w = h * ar; }
+    const cx = (r.x + r.w / 2) * SW, cy = (r.y + r.h / 2) * SH;
+    return { x: Math.max(0, Math.min(SW - w, cx - w / 2)), y: Math.max(0, Math.min(SH - h, cy - h / 2)), w, h };
+  }
   function drawWin(img, sx, sy, sw, sh, box, label, kind, alpha) {
-    const th = S.windowed ? 20 : 0, aspect = sw / sh;
-    let dw = Math.max(72, sw * S.scale), dh = dw / aspect;
-    dh = Math.min(300, Math.max(40, dh)); dw = Math.min(420, dh * aspect);
+    const th = S.windowed ? 20 : 0, aspect = S.uni ? SW / SH : sw / sh;
+    let dw, dh;
+    if (S.uni) { dw = S.usize / 100 * SW; dh = dw / aspect; }
+    else { dw = Math.max(72, sw * S.scale); dh = dw / aspect; dh = Math.min(300, Math.max(40, dh)); dw = Math.min(420, dh * aspect); }
     const cx = (box.x + box.w / 2) * SW, cy = (box.y + box.h / 2) * SH;
     const x0 = Math.min(SW - dw - 4, Math.max(4, cx - dw / 2));
     const y0 = Math.min(SH - dh - th - 4, Math.max(4, cy - (dh + th) / 2));
@@ -5524,6 +5544,7 @@ return a / b;`,pse=`
     const order = tracks.slice().sort((a, b) => (a.kind === 'face') - (b.kind === 'face'));
     for (const t of order) {
       if (!isLive(t)) continue; live++;
+      if (S.uni) { const u = uniRect(); drawWin(src, u.x, u.y, u.w, u.h, t, t.kind + '#' + t.id, t.kind, 1); continue; }
       const sw = Math.max(8, t.w * SW), sh = Math.max(8, t.h * SH);
       drawWin(src, t.x * SW, t.y * SH, sw, sh, t, t.kind + '#' + t.id, t.kind, 1);
     }
@@ -5594,6 +5615,7 @@ return a / b;`,pse=`
   bindRange('scale', 'scale', (v) => v / 100, (v) => v.toFixed(2));
   bindRange('trail', 'trail', id, id);
   bindRange('bg', 'bg', id, id);
+  bindRange('usize', 'usize', id, id);
   function markWall() { document.querySelectorAll('[data-wall]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.wall === S.wall))); }
   function stopDesk() {
     if (deskStream) { deskStream.getTracks().forEach((t) => t.stop()); deskStream = null; }
@@ -5656,10 +5678,12 @@ return a / b;`,pse=`
   }
   if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) || matchMedia('(pointer: coarse)').matches) { $('liveDesk').hidden = true; $('liveNote').hidden = true; }
 
+  function setUC(v) { S.ucontent = v; document.querySelectorAll('[data-uc]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.uc === v))); }
+  document.querySelectorAll('[data-uc]').forEach((b) => b.addEventListener('click', () => { setUC(b.dataset.uc); tracks.forEach((t) => { t.hist.length = 0; }); }));
   /* ---------- presets ---------- */
-  const PKEYS = ['seg', 'split', 'thr', 'minSize', 'maxWin', 'zone', 'release', 'scale', 'trail', 'bg'];
+  const PKEYS = ['seg', 'split', 'thr', 'minSize', 'maxWin', 'zone', 'release', 'scale', 'trail', 'bg', 'usize'];
   const PSCALE = { zone: 100, scale: 100 };
-  const PCHK = { windowed: 'windowed', mirror: 'mirror', labels: 'labels', trackMotion: 'motion', trackFace: 'face', roiOnly: 'roi', showZone: 'showZone' };
+  const PCHK = { uni: 'uni', windowed: 'windowed', mirror: 'mirror', labels: 'labels', trackMotion: 'motion', trackFace: 'face', roiOnly: 'roi', showZone: 'showZone' };
   const BUILTIN = {
     'Predeterminado': { seg: 5, split: 2, thr: 22, minSize: 20, maxWin: 10, zone: 1.5, release: 120, scale: 1.25, trail: 5, bg: 0, wall: 'landscape', windowed: true, labels: true, motion: true, face: true, roi: true, showZone: false },
     'Solo cabeza': { seg: 6, split: 2, thr: 22, minSize: 20, maxWin: 8, zone: 1.2, release: 80, scale: 1.25, trail: 4, bg: 0, wall: 'black', windowed: true, labels: false, motion: true, face: true, roi: true, showZone: false },
@@ -5669,16 +5693,17 @@ return a / b;`,pse=`
   function loadP() { try { userPresets = JSON.parse(localStorage.getItem('vf-presets') || '{}') || {}; } catch (e) { userPresets = {}; } }
   function saveP() { try { localStorage.setItem('vf-presets', JSON.stringify(userPresets)); return true; } catch (e) { return false; } }
   function lastP(v) { try { if (v === undefined) return localStorage.getItem('vf-last'); localStorage.setItem('vf-last', v); } catch (e) { return null; } }
-  function snapshot() {
+  function presetSnap() {
     const o = {};
     PKEYS.forEach((k) => { o[k] = S[k]; });
     Object.values(PCHK).forEach((k) => { o[k] = S[k]; });
-    o.wall = S.wall === 'live' ? 'landscape' : S.wall; o.port = SW < SH;
+    o.wall = S.wall === 'live' ? 'landscape' : S.wall; o.port = SW < SH; o.ucontent = S.ucontent;
     return o;
   }
   function applyPreset(p) {
     PKEYS.forEach((k) => { if (p[k] === undefined) return; const el = $(k); el.value = Math.round(p[k] * (PSCALE[k] || 1)); el.dispatchEvent(new Event('input')); });
     Object.entries(PCHK).forEach(([cid, k]) => { if (p[k] === undefined) return; const el = $(cid); el.checked = !!p[k]; el.dispatchEvent(new Event('change')); });
+    if (p.ucontent) setUC(p.ucontent);
     if (p.wall) { if (S.wall === 'live') stopDesk(); S.wall = p.wall; markWall(); }
     if (p.port !== undefined && p.port !== (SW < SH)) setDims(p.port);
   }
@@ -5701,7 +5726,7 @@ return a / b;`,pse=`
   $('presetSave').addEventListener('click', () => {
     const name = $('presetName').value.trim();
     if (!name) { pnote('Escribe un nombre para el preset.'); $('presetName').focus(); return; }
-    userPresets[name] = snapshot();
+    userPresets[name] = presetSnap();
     const ok = saveP(); fillSel('u:' + name); lastP('u:' + name);
     pnote(ok ? 'Guardado «' + name + '». Se queda en este navegador.' : 'No pude guardar en este navegador (almacenamiento bloqueado). Vale solo hasta cerrar la página.');
   });
@@ -5785,7 +5810,7 @@ return a / b;`,pse=`
     else if ((e.key === 'f' || e.key === 'F') && !(e.target && e.target.type === 'text')) { fmode ? exitFull() : goFs(); }
     else if ((e.key === 'p' || e.key === 'P') && fmode) shell.classList.toggle('show-panel');
   });
-  [['windowed', 'windowed'], ['mirror', 'mirror'], ['labels', 'labels'], ['trackMotion', 'motion'],
+  [['windowed', 'windowed'], ['uni', 'uni'], ['mirror', 'mirror'], ['labels', 'labels'], ['trackMotion', 'motion'],
    ['trackFace', 'face'], ['roiOnly', 'roi'], ['showZone', 'showZone']].forEach(([cid, key]) => {
     const el = $(cid); el.addEventListener('change', () => { S[key] = el.checked; if (key === 'mirror') resetTracking(); });
   });
