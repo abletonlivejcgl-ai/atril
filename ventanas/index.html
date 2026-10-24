@@ -79,7 +79,9 @@ input[type="range"] { width: 100%; min-width: 0; margin: 0; }
 .btn.rec.on { background: #d93025; color: #fff; }
 .tools .btn.rec.on { background: #d93025; color: #fff; }
 .tools .btn:hover { border-color: var(--hud-fg); }
-.msg { top: 50px; }
+.msg { top: 50px; padding-right: 44px; z-index: 8; }
+.msgx { position: absolute; right: 6px; top: 6px; width: 34px; height: 34px; border: 0; border-radius: 17px; background: var(--chip); color: var(--fg); font-size: 20px; line-height: 1; cursor: pointer; }
+#presetName, #presetSel { text-align: left; }
 #pip { position: absolute; right: 10px; bottom: 10px; width: 84px; height: auto; border: 2px solid #fff; border-radius: 8px; z-index: 5; background: #000; box-shadow: 0 2px 10px rgba(0,0,0,.4); pointer-events: none; }
 .shell.full { position: fixed; inset: 0; z-index: 100; background: #000; }
 .shell.full .grid { display: block; height: 100%; }
@@ -124,6 +126,18 @@ input[type="range"] { width: 100%; min-width: 0; margin: 0; }
     </section>
 
     <aside class="panel" aria-label="Controles">
+      <div>
+        <h2>Presets</h2>
+        <div class="stack">
+          <select id="presetSel" class="btn" aria-label="Elegir preset"></select>
+          <input type="text" id="presetName" class="btn" placeholder="Nombre del preset" maxlength="40" autocomplete="off">
+          <div class="seg" role="group" aria-label="Acciones de presets">
+            <button type="button" id="presetSave">Guardar</button>
+            <button type="button" id="presetDel">Borrar</button>
+          </div>
+          <p class="note" id="presetNote">Guarda tus ajustes con un nombre y recupéralos cuando quieras.</p>
+        </div>
+      </div>
       <div>
         <h2>Origen</h2>
         <div class="stack">
@@ -5525,7 +5539,8 @@ return a / b;`,pse=`
   /* ---------- origen: cámara y vídeo ---------- */
   let stream = null;
   const msg = $('msg');
-  function showMsg(html) { msg.innerHTML = html; msg.hidden = false; }
+  function showMsg(html) { msg.innerHTML = html + '<button type="button" class="msgx" aria-label="Cerrar aviso">×</button>'; msg.hidden = false; }
+  msg.addEventListener('click', (e) => { if (!e.target.closest('a')) msg.hidden = true; });
   function stopStream() { if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; } vid.srcObject = null; }
   function resetTracking() { tracks.length = 0; hasPrev = false; roi = null; roiT = null; faceEver = false; srcT0 = clk; }
   async function setSource(name) {
@@ -5639,6 +5654,64 @@ return a / b;`,pse=`
     pctx.drawImage(src, 0, 0, pip.width, pip.height);
     if (roi) { pctx.strokeStyle = '#ffd60a'; pctx.lineWidth = 2; pctx.strokeRect(roi.x * pip.width, roi.y * pip.height, roi.w * pip.width, roi.h * pip.height); }
   }
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) || matchMedia('(pointer: coarse)').matches) { $('liveDesk').hidden = true; $('liveNote').hidden = true; }
+
+  /* ---------- presets ---------- */
+  const PKEYS = ['seg', 'split', 'thr', 'minSize', 'maxWin', 'zone', 'release', 'scale', 'trail', 'bg'];
+  const PSCALE = { zone: 100, scale: 100 };
+  const PCHK = { windowed: 'windowed', mirror: 'mirror', labels: 'labels', trackMotion: 'motion', trackFace: 'face', roiOnly: 'roi', showZone: 'showZone' };
+  const BUILTIN = {
+    'Predeterminado': { seg: 5, split: 2, thr: 22, minSize: 20, maxWin: 10, zone: 1.5, release: 120, scale: 1.25, trail: 5, bg: 0, wall: 'landscape', windowed: true, labels: true, motion: true, face: true, roi: true, showZone: false },
+    'Solo cabeza': { seg: 6, split: 2, thr: 22, minSize: 20, maxWin: 8, zone: 1.2, release: 80, scale: 1.25, trail: 4, bg: 0, wall: 'black', windowed: true, labels: false, motion: true, face: true, roi: true, showZone: false },
+    'Caos de ventanas': { seg: 3, split: 3, thr: 16, minSize: 12, maxWin: 20, zone: 3, release: 400, scale: 1, trail: 12, bg: 20, wall: 'landscape', windowed: true, labels: true, motion: true, face: true, roi: false, showZone: false }
+  };
+  let userPresets = {};
+  function loadP() { try { userPresets = JSON.parse(localStorage.getItem('vf-presets') || '{}') || {}; } catch (e) { userPresets = {}; } }
+  function saveP() { try { localStorage.setItem('vf-presets', JSON.stringify(userPresets)); return true; } catch (e) { return false; } }
+  function lastP(v) { try { if (v === undefined) return localStorage.getItem('vf-last'); localStorage.setItem('vf-last', v); } catch (e) { return null; } }
+  function snapshot() {
+    const o = {};
+    PKEYS.forEach((k) => { o[k] = S[k]; });
+    Object.values(PCHK).forEach((k) => { o[k] = S[k]; });
+    o.wall = S.wall === 'live' ? 'landscape' : S.wall; o.port = SW < SH;
+    return o;
+  }
+  function applyPreset(p) {
+    PKEYS.forEach((k) => { if (p[k] === undefined) return; const el = $(k); el.value = Math.round(p[k] * (PSCALE[k] || 1)); el.dispatchEvent(new Event('input')); });
+    Object.entries(PCHK).forEach(([cid, k]) => { if (p[k] === undefined) return; const el = $(cid); el.checked = !!p[k]; el.dispatchEvent(new Event('change')); });
+    if (p.wall) { if (S.wall === 'live') stopDesk(); S.wall = p.wall; markWall(); }
+    if (p.port !== undefined && p.port !== (SW < SH)) setDims(p.port);
+  }
+  function fillSel(sel) {
+    const selEl = $('presetSel'); selEl.innerHTML = '';
+    const add = (name, label) => { const o = document.createElement('option'); o.value = name; o.textContent = label; selEl.appendChild(o); };
+    add('', 'Elegir preset…');
+    Object.keys(BUILTIN).forEach((n) => add('b:' + n, n));
+    Object.keys(userPresets).forEach((n) => add('u:' + n, '★ ' + n));
+    selEl.value = sel || '';
+  }
+  function pnote(t) { $('presetNote').textContent = t; }
+  loadP(); fillSel('');
+  $('presetSel').addEventListener('change', () => {
+    const v = $('presetSel').value; if (!v) return;
+    const name = v.slice(2), p = v[0] === 'b' ? BUILTIN[name] : userPresets[name];
+    if (!p) return;
+    applyPreset(p); lastP(v); $('presetName').value = v[0] === 'u' ? name : ''; pnote('Preset «' + name + '» aplicado.');
+  });
+  $('presetSave').addEventListener('click', () => {
+    const name = $('presetName').value.trim();
+    if (!name) { pnote('Escribe un nombre para el preset.'); $('presetName').focus(); return; }
+    userPresets[name] = snapshot();
+    const ok = saveP(); fillSel('u:' + name); lastP('u:' + name);
+    pnote(ok ? 'Guardado «' + name + '». Se queda en este navegador.' : 'No pude guardar en este navegador (almacenamiento bloqueado). Vale solo hasta cerrar la página.');
+  });
+  $('presetDel').addEventListener('click', () => {
+    const v = $('presetSel').value;
+    if (!v || v[0] !== 'u') { pnote('Elige uno de tus presets (con ★) para borrarlo. Los de serie no se borran.'); return; }
+    const name = v.slice(2); delete userPresets[name]; saveP(); fillSel(''); $('presetName').value = ''; lastP(''); pnote('Borrado «' + name + '».');
+  });
+  { const lv = lastP(); if (lv) { const name = lv.slice(2), p = lv[0] === 'b' ? BUILTIN[name] : userPresets[name]; if (p) { applyPreset(p); fillSel(lv); $('presetName').value = lv[0] === 'u' ? name : ''; } } }
+
   /* ---------- grabar ---------- */
   const recBtn = $('recBtn'); let rec = null, recChunks = [], recT0 = 0, recTick = 0, recMic = null, recUrl = null;
   function recMime() {
