@@ -80,6 +80,7 @@ input[type="range"] { width: 100%; min-width: 0; margin: 0; }
 .tools .btn.rec.on { background: #d93025; color: #fff; }
 .tools .btn:hover { border-color: var(--hud-fg); }
 .msg { top: 50px; }
+#pip { position: absolute; right: 10px; bottom: 10px; width: 84px; height: auto; border: 2px solid #fff; border-radius: 8px; z-index: 5; background: #000; box-shadow: 0 2px 10px rgba(0,0,0,.4); pointer-events: none; }
 .shell.full { position: fixed; inset: 0; z-index: 100; background: #000; }
 .shell.full .grid { display: block; height: 100%; }
 .shell.full .stage-wrap { width: 100%; max-width: none; margin: 0; height: 100%; aspect-ratio: auto; border: 0; border-radius: 0; background: #000; }
@@ -118,6 +119,7 @@ input[type="range"] { width: 100%; min-width: 0; margin: 0; }
         <button type="button" class="btn" id="exitBtn" hidden title="Tecla Esc">Salir</button>
       </div>
       <div class="hud"><span id="fps">-- fps</span><span id="count">0 ventanas</span><span id="faceStat">cara: --</span></div>
+      <canvas id="pip" width="90" height="160" hidden></canvas>
       <div class="msg" id="msg" hidden></div>
     </section>
 
@@ -168,6 +170,7 @@ input[type="range"] { width: 100%; min-width: 0; margin: 0; }
           <label class="check"><input type="checkbox" id="windowed" checked> Modo ventana</label>
           <label class="check"><input type="checkbox" id="mirror" checked> Espejo</label>
           <label class="check"><input type="checkbox" id="labels" checked> Etiquetas</label>
+          <label class="check"><input type="checkbox" id="showPip" checked> Ver mi cámara en miniatura</label>
           <label class="check"><input type="checkbox" id="recAudio" checked> Grabar con micrófono</label>
           <label class="row" for="scale"><span>Escala</span><input type="range" id="scale" min="60" max="260" value="125"><output id="scaleO">1.25</output></label>
           <label class="row" for="trail"><span>Estela</span><input type="range" id="trail" min="0" max="12" value="5"><output id="trailO">5</output></label>
@@ -5278,7 +5281,9 @@ return a / b;`,pse=`
 
   /* ---------- zona de la cabeza ---------- */
   let fdReady = false, roi = null, roiT = null, roiSeen = -1e9;
-  function roiActive() { return S.roi && fdReady && S.src !== 'demo'; }
+  let faceEver = false, srcT0 = 0;
+  const noFaceFallback = () => !faceEver && clk - srcT0 > 3000;
+  function roiActive() { return S.roi && fdReady && S.src !== 'demo' && !noFaceFallback(); }
   function updateRoi() {
     if (roiT && clk - roiSeen < 700) {
       if (!roi) roi = { x: roiT.x, y: roiT.y, w: roiT.w, h: roiT.h };
@@ -5436,7 +5441,7 @@ return a / b;`,pse=`
         const f = faces[0], k = S.zone, w = Math.min(1, f.w * k), h = Math.min(1, f.h * k);
         const cx = f.x + f.w / 2, cy = f.y + f.h / 2 - f.h * 0.12 * k;
         const x = Math.max(0, Math.min(1 - w, cx - w / 2)), y = Math.max(0, Math.min(1 - h, cy - h / 2));
-        roiT = { x, y, w, h }; roiSeen = clk;
+        roiT = { x, y, w, h }; roiSeen = clk; faceEver = true;
         if (S.face) updateTracks(faces, 'face');
       }
     } catch (e) { /* un fallo puntual no detiene el bucle */ }
@@ -5513,7 +5518,8 @@ return a / b;`,pse=`
       ctx.strokeRect(roi.x * SW, roi.y * SH, roi.w * SW, roi.h * SH); ctx.restore();
     }
     $('count').textContent = live + (live === 1 ? ' ventana' : ' ventanas');
-    $('faceStat').textContent = S.src === 'demo' ? 'cara: demo' : !fdReady ? 'cara: sin detector' : roi ? 'cara: sí' : 'cara: no';
+    $('faceStat').textContent = S.src === 'demo' ? 'cara: demo' : !fdReady ? 'cara: sin detector' : roi ? 'cara: sí' : noFaceFallback() ? 'sin cara: sigo todo el movimiento' : 'cara: no';
+    pipTick();
   }
 
   /* ---------- origen: cámara y vídeo ---------- */
@@ -5521,7 +5527,7 @@ return a / b;`,pse=`
   const msg = $('msg');
   function showMsg(html) { msg.innerHTML = html; msg.hidden = false; }
   function stopStream() { if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; } vid.srcObject = null; }
-  function resetTracking() { tracks.length = 0; hasPrev = false; roi = null; roiT = null; }
+  function resetTracking() { tracks.length = 0; hasPrev = false; roi = null; roiT = null; faceEver = false; srcT0 = clk; }
   async function setSource(name) {
     msg.hidden = true; stopStream(); vid.removeAttribute('src'); vid.load();
     S.src = name; resetTracking();
@@ -5625,6 +5631,14 @@ return a / b;`,pse=`
   async function keepAwake() { try { if (navigator.wakeLock && !wl) { wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', () => { wl = null; }); } } catch (e) { wl = null; } }
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.src === 'camera') keepAwake(); });
 
+  const pip = $('pip'), pctx = pip.getContext('2d');
+  function pipTick() {
+    const on = S.src !== 'demo' && $('showPip').checked;
+    pip.hidden = !on; if (!on) return;
+    if (pip.width !== Math.round(SW / 6) || pip.height !== Math.round(SH / 6)) { pip.width = Math.round(SW / 6); pip.height = Math.round(SH / 6); }
+    pctx.drawImage(src, 0, 0, pip.width, pip.height);
+    if (roi) { pctx.strokeStyle = '#ffd60a'; pctx.lineWidth = 2; pctx.strokeRect(roi.x * pip.width, roi.y * pip.height, roi.w * pip.width, roi.h * pip.height); }
+  }
   /* ---------- grabar ---------- */
   const recBtn = $('recBtn'); let rec = null, recChunks = [], recT0 = 0, recTick = 0, recMic = null, recUrl = null;
   function recMime() {
